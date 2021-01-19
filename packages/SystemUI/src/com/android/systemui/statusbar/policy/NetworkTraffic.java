@@ -98,12 +98,12 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
     private int mMode = MODE_UPSTREAM_AND_DOWNSTREAM;
     private int mSubMode = MODE_UPSTREAM_AND_DOWNSTREAM;
     protected boolean mIsActive;
-    private boolean mTrafficActive;
+    private boolean mTrafficActive = false;
     private long mLastTxBytes;
     private long mLastRxBytes;
     private long mLastUpdateTime;
     private boolean mAutoHide;
-    private long mAutoHideThreshold;
+    private long mAutoHideThresholdBytes;
     private int mUnits;
     protected int mIconTint = 0;
     protected int newTint = Color.WHITE;
@@ -180,57 +180,56 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
     private Handler mTrafficHandler = new Handler() {
         @Override
         public void handleMessage(Message msg) {
-            long rxBytes = 0;
-            long txBytes = 0;
+            final long now = SystemClock.elapsedRealtime();
+            long timeDelta = now - mLastUpdateTime; /* ms */
 
-            if (msg.what == MESSAGE_TYPE_PERIODIC_REFRESH) {
-                final long now = SystemClock.elapsedRealtime();
-                long timeDelta = now - mLastUpdateTime; /* ms */
-
-                if (timeDelta >= mRefreshInterval * 1000 * 0.95f) {
-                    long[] newTotalRxTxBytes = getTotalRxTxBytes();
-
-                    final long rxBytesDelta = newTotalRxTxBytes[0] - mLastRxBytes;
-                    final long txBytesDelta = newTotalRxTxBytes[1] - mLastTxBytes;
-
-                    rxBytes = (long) (rxBytesDelta / (timeDelta / 1000f));
-                    txBytes = (long) (txBytesDelta / (timeDelta / 1000f));
-
-                    mLastRxBytes = newTotalRxTxBytes[0];
-                    mLastTxBytes = newTotalRxTxBytes[1];
-                    mLastUpdateTime = now;
+            if (timeDelta < mRefreshInterval * 1000 * 0.95f) {
+                if (msg.what != MESSAGE_TYPE_UPDATE_VIEW) {
+                    return;
+                }
+                if (timeDelta < 1) {
+                    timeDelta = Long.MAX_VALUE;
                 }
             }
 
-            final boolean showUpstream =
-                    mMode == MODE_UPSTREAM_ONLY || mMode == MODE_UPSTREAM_AND_DOWNSTREAM;
-            final boolean showDownstream =
-                    mMode == MODE_DOWNSTREAM_ONLY || mMode == MODE_UPSTREAM_AND_DOWNSTREAM;
-            final boolean aboveThreshold = (showUpstream && txBytes > mAutoHideThreshold)
-                    || (showDownstream && rxBytes > mAutoHideThreshold);
-            mIsActive = mAttached && mConnectionAvailable && (!mAutoHide || aboveThreshold);
-            int submode = MODE_UPSTREAM_AND_DOWNSTREAM;
-            final boolean trafficactive = (txBytes > 0 || rxBytes > 0);
-
             clearHandlerCallbacks();
+
+            final long[] newTotalRxTxBytes = getTotalRxTxBytes();
+            final long rxBytesDelta = newTotalRxTxBytes[0] - mLastRxBytes;
+            final long txBytesDelta = newTotalRxTxBytes[1] - mLastTxBytes;
+            final long rxBytes = (long) (rxBytesDelta / (timeDelta / 1000f));
+            final long txBytes = (long) (txBytesDelta / (timeDelta / 1000f));
+
+            mLastRxBytes = newTotalRxTxBytes[0];
+            mLastTxBytes = newTotalRxTxBytes[1];
+            mLastUpdateTime = now;
+
+            final boolean upstreamMode = mMode == MODE_UPSTREAM_ONLY || 
+                                         mMode == MODE_UPSTREAM_AND_DOWNSTREAM;
+            final boolean downstreamMode = mMode == MODE_DOWNSTREAM_ONLY || 
+                                           mMode == MODE_UPSTREAM_AND_DOWNSTREAM;
+            final boolean aboveThreshold = (downstreamMode && rxBytes > mAutoHideThresholdBytes) ||
+                                           (upstreamMode && txBytes > mAutoHideThresholdBytes);
+
+            mSubMode = MODE_DOWNSTREAM_ONLY;
+            mTrafficActive = (txBytes > 0 || rxBytes > 0);
+            mIsActive = mAttached && mConnectionAvailable && (!mAutoHide || aboveThreshold);
 
             if (mEnabled && mIsActive) {
                 CharSequence output = "";
-                if (showUpstream && showDownstream) {
-                    if (txBytes > rxBytes) {
+                if (mMode == MODE_DOWNSTREAM_ONLY) {
+                    output = formatOutput(rxBytes);
+                } else {
+                    if (txBytes > rxBytes || mMode == MODE_UPSTREAM_ONLY) {
                         output = formatOutput(txBytes);
-                        submode = MODE_UPSTREAM_ONLY;
-                    } else if (txBytes < rxBytes) {
-                        output = formatOutput(rxBytes);
-                        submode = MODE_DOWNSTREAM_ONLY;
+                        mSubMode = MODE_UPSTREAM_ONLY;
                     } else {
                         output = formatOutput(rxBytes);
-                        submode = MODE_UPSTREAM_AND_DOWNSTREAM;
+
+                        if (txBytes == rxBytes) {
+                            mSubMode = mMode;
+                        }
                     }
-                } else if (showDownstream) {
-                    output = formatOutput(rxBytes);
-                } else if (showUpstream) {
-                    output = formatOutput(txBytes);
                 }
 
                 // Update view if there's anything new to show
@@ -241,10 +240,7 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
 
             updateVisibility();
 
-            if (mVisible && (mSubMode != submode ||
-                    mTrafficActive != trafficactive)) {
-                mSubMode = submode;
-                mTrafficActive = trafficactive;
+            if (mVisible) {
                 setTrafficDrawable();
             }
 
@@ -277,18 +273,18 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
 
             if (speed >= Giga) {
                 unit = gunit;
-                decimalFormat = new DecimalFormat("0.##");
+                decimalFormat = new DecimalFormat("0.0#");
                 formatSpeed = decimalFormat.format(speed / (float)Giga);
             } else if (speed >= 100 * Mega) {
                 decimalFormat = new DecimalFormat("##0");
                 unit = munit;
                 formatSpeed = decimalFormat.format(speed / (float)Mega);
             } else if (speed >= 10 * Mega) {
-                decimalFormat = new DecimalFormat("#0.#");
+                decimalFormat = new DecimalFormat("#0.0");
                 unit = munit;
                 formatSpeed = decimalFormat.format(speed / (float)Mega);
             } else if (speed >= Mega) {
-                decimalFormat = new DecimalFormat("0.##");
+                decimalFormat = new DecimalFormat("0.0#");
                 unit = munit;
                 formatSpeed = decimalFormat.format(speed / (float)Mega);
             } else if (speed >= 100 * Kilo) {
@@ -296,11 +292,11 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
                 unit = kunit;
                 formatSpeed = decimalFormat.format(speed / (float)Kilo);
             } else if (speed >= 10 * Kilo) {
-                decimalFormat = new DecimalFormat("#0.#");
+                decimalFormat = new DecimalFormat("#0.0");
                 unit = kunit;
                 formatSpeed = decimalFormat.format(speed / (float)Kilo);
             } else {
-                decimalFormat = new DecimalFormat("0.##");
+                decimalFormat = new DecimalFormat("0.0#");
                 unit = kunit;
                 formatSpeed = decimalFormat.format(speed / (float)Kilo);
             }
@@ -407,7 +403,7 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
                 setEnabled();
                 if (mEnabled) {
                     setLines(2);
-                    String txtFont = getResources().getString(com.android.internal.R.string.config_bodyFontFamily);
+                    String txtFont = getResources().getString(com.android.internal.R.string.config_headlineFontFamilyMedium);
                     setTypeface(Typeface.create(txtFont, Typeface.BOLD));
                     setLineSpacing(0.80f, 0.80f);
                 }
@@ -427,7 +423,7 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
             case NETWORK_TRAFFIC_AUTOHIDE_THRESHOLD:
                 int autohidethreshold =
                         TunerService.parseInteger(newValue, 0);
-                mAutoHideThreshold = autohidethreshold * Kilo; /* Convert kB to Bytes */
+                mAutoHideThresholdBytes = autohidethreshold * Kilo; /* Convert kB to Bytes */
                 updateViews();
                 break;
             case NETWORK_TRAFFIC_UNITS:
@@ -443,11 +439,7 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
             case NETWORK_TRAFFIC_HIDEARROW:
                 mHideArrows =
                         TunerService.parseIntegerSwitch(newValue, false);
-                if (!mHideArrows) {
-                    setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
-                } else {
-                    setGravity(Gravity.CENTER);
-                }
+                setGravity(Gravity.CENTER);
                 setTrafficDrawable();
                 break;
             default:
@@ -479,14 +471,12 @@ public class NetworkTraffic extends TextView implements TunerService.Tunable {
             drawableResId = 0;
         } else if (!mTrafficActive) {
             drawableResId = R.drawable.stat_sys_network_traffic;
-        } else if (mMode == MODE_UPSTREAM_ONLY || mSubMode == MODE_UPSTREAM_ONLY) {
+        } else if (mSubMode == MODE_UPSTREAM_ONLY) {
             drawableResId = R.drawable.stat_sys_network_traffic_up;
-        } else if (mMode == MODE_DOWNSTREAM_ONLY || mSubMode == MODE_DOWNSTREAM_ONLY) {
+        } else if (mSubMode == MODE_DOWNSTREAM_ONLY) {
             drawableResId = R.drawable.stat_sys_network_traffic_down;
-        } else if (mMode == MODE_UPSTREAM_AND_DOWNSTREAM) {
-            drawableResId = R.drawable.stat_sys_network_traffic_updown;
         } else {
-            drawableResId = 0;
+            drawableResId = R.drawable.stat_sys_network_traffic_updown;
         }
         drawable = drawableResId != 0 ? getResources().getDrawable(drawableResId) : null;
         if (mDrawable != drawable || mIconTint != newTint) {
