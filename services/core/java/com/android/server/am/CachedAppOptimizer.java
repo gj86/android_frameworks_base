@@ -532,25 +532,25 @@ public final class CachedAppOptimizer {
     private static native int getBinderFreezeInfo(int pid);
 
     /**
-     * Determines whether the freezer is supported by this system
+     * Determines whether the freezer is correctly supported by this system
      */
     public static boolean isFreezerSupported() {
         boolean supported = false;
         FileReader fr = null;
 
         try {
-            fr = new FileReader("/sys/fs/cgroup/freezer/cgroup.freeze");
-            char state = (char) fr.read();
+            fr = new FileReader("/dev/freezer/frozen/freezer.killable");
+            int i = fr.read();
 
-            if (state == '1' || state == '0') {
+            if ((char) i == '1') {
                 supported = true;
             } else {
-                Slog.e(TAG_AM, "unexpected value in cgroup.freeze");
+                Slog.w(TAG_AM, "Freezer killability is turned off, disabling freezer");
             }
         } catch (java.io.FileNotFoundException e) {
-            Slog.d(TAG_AM, "cgroup.freeze not present");
+            Slog.d(TAG_AM, "Freezer.killable not present, disabling freezer");
         } catch (Exception e) {
-            Slog.d(TAG_AM, "unable to read cgroup.freeze: " + e.toString());
+            Slog.d(TAG_AM, "Unable to read freezer.killable, disabling freezer: " + e.toString());
         }
 
         if (fr != null) {
